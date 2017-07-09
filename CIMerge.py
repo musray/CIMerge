@@ -2,215 +2,153 @@
 import os
 import csv
 import sys
-from operator import itemgetter
+# from operator import itemgetter
 
 
-def sort_datalink(csv_reader):
-    # csv_reader是一个csv.reader的object
+def get_source_data(csv_file):
+    # 返回一个由csv内容组成的list
+    # 内容只包括有限的几类
 
-    # 把csv的reader转化成一个list
-    csv_list = list(csv_reader)
+    types = ['AI', 'AO', 'DI', 'DO', 'CIM', 'CI', 'CO']
+    with open(csv_file, 'r', encoding='gbk') as file:
+        reader = csv.reader(file, delimiter=',')
+        data = [data for data in reader if data[4] in types]
 
-    # 根据技术部给的文档，"数据类型"的排列是固定顺序的，次序如下：
-    data_type = ['real_signal', 'int_signal', 'real', 'bool_signal', 'int', 'bool', 'device_signal']
+    print('return get_source_data')
+    return data
 
-    for row in csv_list:
-        # 如果说明列没有内容，说明是datalink的点
-        if not ('环点' in row[10]):
-            # 在数据类型清单中，查该row数据类型对应的index，增加到row的最后
-            row.extend([data_type.index(row[2])])
-        # 如果说明列有内容，说明是环网点
+
+def csv_query(query_data, source, flag):
+    # data可能是ai_sheet中的一行，或是di_sheet中的一行数据
+    # 在ai_sheet中，`2`列是Tag信号名，`9`列是DeviceID站号(格式纯数字),`11`列放value值
+    # 在di_sheet中，`2`列是Tag信号名，`10`列是DeviceID站号(格式纯数字)，`12`列放value值
+    # source是一个list组成的list，`1`列是Name信号名，`10`列是Station站号（格式YJ5_数字）,`8`列是Value值
+    # 如果source中的value值是空的，则返回字符串invalid.
+    # 如果没有找到对应的点，则返回字符串notfound
+    notfound = True
+
+    for line in source:
+        # 点名相同，而且站号相同
+
+        if flag == 'ai':
+            if line[1] == query_data[2] and line[10].split('_')[1] == query_data[9]:
+                return line[8]
+        if flag == 'di':
+            if line[1] == query_data[2] and line[10].split('_')[1] == query_data[10]:
+                print('line[8] is %s' % line[8])
+                return line[8]
+
+    if notfound:
+        return 'notfound'
+
+
+def targets_handler(targets, source_data):
+    # targets是一个由tuple组成的list，source_data是一个源数据的list
+    for in_file, out_file in targets:
+        # 打开in和out
+        # 把in_file的第一行到最后一行，存成一个list
+        # 遍历list
+        # - 在source_data中找点
+        #   - 有这个点:
+        #       - 把它的value，写到in_file的数据中
+        #   - 没有这个点:
+        #       - 把这个点的信息写到一个lost_found的list中
+        # - 把准备好的数据写到out_file里
+
+        # flag，是csv_query()的第三个参数。
+        if 'ai_sheet' in in_file:
+            flag = 'ai'
         else:
-            # 将100添加到row的最后。（实际这个地方填什么值都行）
-            row.extend([100])
+            flag = 'di'
 
-    # 经过以上的处理，csv的数据从11列变成了12列(12列就是辅助列)
-    # 根据6, 7, 8, 9, 12列的优先顺序，进行排序，并返回
-    sorted_csv_list = sorted(csv_list, key=itemgetter(6, 7, 8, 9, 12))
+        with open(in_file, 'r', encoding='gbk') as csv_in,\
+                open(out_file, 'w', encoding='gbk') as csv_out:
 
-    # 最后把辅助列删掉
-    for row in sorted_csv_list:
-        row.pop()
+            reader = csv.reader(csv_in, delimiter=',')
+            writer = csv.writer(csv_out, delimiter=',')
 
-    return sorted_csv_list
+            csv_in_data = list(reader)
+            csv_out_data = []
 
+            print('开始处理文件 %s，可能需要几分钟，请稍候...' % os.path.basename(in_file))
+            for query_data in csv_in_data:
+                # 如果点名单元格中的内容长度<4，说明这一列不是数据列
+                # 原封不动写到输出文件里
+                if len(query_data[2]) < 4:
+                    writer.writerow(query_data)
+                # 否则，说明是数据列
+                else:
+                    csv_out_data = query_data[:]
+                    value = csv_query(query_data, source_data, flag)
+                    # print(value)
+                    # value有两种可能：正常值, 或 'notfound'
 
-def sort_firmnet(csv_reader):
-    csv_list = list(csv_reader)
+                    # ai_sheet和di_sheet中，存放value的位置是不一样的，所以:
+                    if flag == 'ai':
+                        csv_out_data[11] = value
+                    elif flag == 'di':
+                        csv_out_data[12] = value
 
-    # 由于firmnet中的偏移地址，有些是int，有些是str（这是一个坑）
-    # 所以这里先把offset1中的值全都变成int，再执行排序，否则排序结果是乱的
-    for row in csv_list:
-        row[6] = int(row[6])
-
-    # firmnet点表的排序规则：
-    # 1. 按node排序（表格第0列），保证相同节点的放在一起
-    # 2. 按offset1（表格第6列）排序，升序
-    # 3. 排序之后，在同一node内，send和dss就按照offset值的升序排列了
-    sorted_csv_list = sorted(csv_list, key=itemgetter(0, 6))
-    return sorted_csv_list
-
-
-def datalink_offset_calc(data_list):
-    # offset计算规则
-    # 1. csv_list已经是按要求排序过了的
-    # 2. 以"网口"为单位，内进行offset计算
-    # 4. 每个网口的第一个信号，起始地址都是0
-    # 5. 第n+1个信号，其offset是offset(n) + DATA_LENGTH
-    # 6. DATA_LENGTH长度是固定的，见下面的具体定义
-
-    # 定义数据类型的长度
-    data_length = {
-        'real_signal': 8,
-        'real': 4,
-        'int_signal': 4,
-        'bool_signal': 2,
-        'int': 2,
-        'bool': 1,
-        'device_signal': 4
-    }
-
-
-    # 定义一个对网口的记录
-    port_list = []
-    # 起始offset
-    start_value = 0
-    # offset增量（取决于上一行的数据类型）
-    increment = 0
-
-    for row in data_list:
-
-        # 如果该行是datalink：
-        if not ('环点' in row[10]):
-            # 生成一个全"站"唯一的网口号：机柜号+机笼号+槽号+端口号
-            port = str(row[6]) + str(row[7]) + str(row[8]) + str(row[9])
-            # 如果改行的网口号，不是第一次出现：
-            if port in port_list:
-                start_value += increment
-                row[11] = start_value
-                increment = data_length[row[2]]
-            # 如果改行网口号是第一次出现：
-            else:
-                # 有必要再赋值一遍，因为在进入下一个网口的时候，这个值需要从0开始
-                start_value = 0
-                # 记录下increment，给下一行用
-                increment = data_length[row[2]]
-                # 记录下这个端口号
-                port_list.append(port)
-                # 一个端口的第一个数据点，offset值从0开始
-                row[11] = 0
-
-    return data_list
-
-
-def firmnet_offset_calc(data_list):
-
-    # firmnet offset的计算规则
-    # 1. 如果row[1]不是send或dss类型，该行不做处理
-    # 2. 如果row[1]是send或dss类型，则：
-    #    - 如果站号(node)是第一次遇到，则: 记录row[6]的值，作为decrement_value; row[6] = 0
-    #    - 如果站号(node)不是第一次遇到，则：row[6] -= decrement_value
-
-    # 新建一个站号node列表
-    node_list = []
-
-    # 生成一个用于修正偏移地址的递减值
-    # 在正式的数据处理中，每一个node的现有最小偏移地址，会赋给decrement
-    decrement = 0
-
-    for row in data_list:
-        # 如果 direction 列的内容是 send 或 dss（dss是device signal的send信号）
-        if row[1].lower() == 'send' or row[1].lower() == 'dss':
-            # 该节点的第2行至最后一行
-            if row[0] in node_list:
-                row[6] = int(row[6]) - decrement
-            # 该节点的第1行
-            else:
-                node_list.append(row[0])  # row[0]是node号
-                decrement = int(row[6])   # row[6]是原offset
-                row[6] = 0                # 将该行offset设为0
-
-    return data_list
-
-
-def csv_handler(in_file_path, out_file_path):
-    # file_name = os.listdir('./sheets')[2]
-    # file_path = os.path.join(os.getcwd(), 'sheets', file_name)
-    # new_file_path = os.path.join(os.getcwd(), 'sheets', 'new_' + file_name)
-
-    with open(in_file_path, 'r', encoding='gbk') as csv_in, \
-         open(out_file_path, 'w', encoding='gbk', newline='') as csv_out:
-
-        reader = csv.reader(csv_in, delimiter=',')
-        writer = csv.writer(csv_out, delimiter=',')
-
-        # 如果文件是datalink清单
-        if 'netdev' in in_file_path.lower():
-
-            # 先写header，增加title
-            header = next(reader)
-            header[-1] = '偏移'
-            writer.writerow(header)
-
-            # 生成一个排序后的csv数据list
-            sorted_csv_list = sort_datalink(reader)
-            # 为datalink类型数据生成offset
-            list_with_offset = datalink_offset_calc(sorted_csv_list)
-
-        # 如果文件是firmnet清单
-        elif 'download' in in_file_path.lower():
-
-            # header不需要处理，直接写到writer里去
-            header = next(reader)
-            writer.writerow(header)
-
-            # 根据Firmnet的排序要求，对数据进行排序
-            sorted_csv_list = sort_firmnet(reader)
-            # 为firmnet类型数据生成offset
-            list_with_offset = firmnet_offset_calc(sorted_csv_list)
-
-        # 将生成的最终数据写入目标文件
-        writer.writerows(list_with_offset)
+                    writer.writerow(csv_out_data)
+            print('处理完成！')
 
 
 def main():
-    # 如果当前文件夹内不存在offset文件夹
-    # 则新建文件夹
-    if not os.path.isdir('offset'):
-        input('没有发现 offset 文件夹，已为你新建。\n请将csv文件放入其中，再运行本程序。\n按任意键退出...')
-        os.mkdir('offset')
+
+    # csv文件，存放在程序根目录内一个叫CI的目录下
+    csv_dir = 'CI'
+
+    if not os.path.isdir(csv_dir):
+        input('没有发现 %s 文件夹，已为你新建。\n请将csv文件放入其中，再运行本程序。\n按任意键退出...' % csv_dir)
+        os.mkdir(csv_dir)
         sys.exit(1)
 
     # 遍历给定文件夹内的所有文件
     # 如果是csv文件，则：
     #   - 挨个处理
-    csvfiles = [item for item in os.listdir('./offset') if '.csv' == item[-4:].lower()]
+    csvfiles = [item for item in os.listdir(csv_dir) if '.csv' == item[-4:].lower()]
 
     # 在offset文件夹中没有csv文件
     if len(csvfiles) == 0:
-        input('在offset文件夹中没有待处理的文件，按任意键退出...')
+        input('%s 文件夹中缺少相关csv文件，按任意键退出...' % csv_dir)
         sys.exit(1)
 
-    hasTarget = False
+    # 为csv文件分类
+    # 如果命名不正确（说明文件内容可能也有问题），则要退出运行
+    source = []
+    targets = []
     for csvfile in csvfiles:
-        if csvfile[:6].lower() == 'netdev' or csvfile[:8].lower() == 'download':
-            hasTarget = True
-            # print('\nDEBUG')
-            # print(csvfile)
-            in_file_path = os.path.join(os.getcwd(), 'offset', csvfile)
-            out_file_path = os.path.join(os.getcwd(), 'offset', 'offset_' + csvfile)
 
-            # 调用csv_handler
-            csv_handler(in_file_path, out_file_path)
+        # 对源文件的判断：文件名中包含"exportIC"
+        if 'exportic' in csvfile.lower():
+            source.append(os.path.join(os.getcwd(), csv_dir, csvfile))
 
-            # 每一个文件处理万之后，hint一下用户
-            print(os.path.basename(csvfile) + ' 处理完毕')
+        # 对目标文件的判断：文件名由"ai"或者"di"开头
+        if csvfile[:2].lower() == 'ai' or csvfile[:2].lower() == 'di':
+            in_file = os.path.join(os.getcwd(), csv_dir, csvfile)
+            out_file = os.path.join(os.getcwd(), csv_dir, 'sync_' + csvfile)
+            # targets是一系列（in_file, out_file）组成的tuple
+            targets.append((in_file, out_file))
 
-    # 如果没有名称中带有 netdev 或者 download 的文件，要hint一下
-    if hasTarget:
+    # 如果源文件存在，且至少存在一个目标文件：
+    # 开始处理文件
+    if len(targets) > 0 and len(source) > 0:
+        #1. 读源文件
+        source_data = get_source_data(source[0])
+        #2. 处理目标文件
+        # targets是一个由tuple组成的list，source_data是一个源数据的list
+        targets_handler(targets, source_data)
+        #3. 所有文件处理完成，cue一下用户
         input('按任意键退出...')
-    else:
-        input('在 offset 文件夹中没有 DEVNET 或 DOWNLOAD 类的 csv 文件。按任意键退出...')
+        sys.exit(0)
+
+    elif len(targets) == 0:
+        input('%s 文件夹中缺少ai_sheet.csv或di_sheet.csv，请检查。\n按任意键退出...' % csv_dir)
+        sys.exit(1)
+    elif len(source) == 0:
+        input('%s 文件夹中缺少exportIC.csv文件，请检查。\n按任意键退出...' % csv_dir)
+        sys.exit(1)
+
 
 if __name__ == '__main__':
     main()
