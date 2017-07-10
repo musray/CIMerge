@@ -2,19 +2,16 @@
 import os
 import csv
 import sys
-# from operator import itemgetter
 
 
 def get_source_data(csv_file):
     # 返回一个由csv内容组成的list
-    # 内容只包括有限的几类
+    # 内容只包括有限的几类（出于后期对查找性能的考虑）
 
     types = ['AI', 'AO', 'DI', 'DO', 'CIM', 'CI', 'CO']
     with open(csv_file, 'r', encoding='gbk') as file:
         reader = csv.reader(file, delimiter=',')
-        data = [data for data in reader if data[4] in types]
-
-    print('return get_source_data')
+        data = [data for data in reader if data[4].upper() in types]
     return data
 
 
@@ -25,21 +22,21 @@ def csv_query(query_data, source, flag):
     # source是一个list组成的list，`1`列是Name信号名，`10`列是Station站号（格式YJ5_数字）,`8`列是Value值
     # 如果source中的value值是空的，则返回字符串invalid.
     # 如果没有找到对应的点，则返回字符串notfound
-    notfound = True
+
+    # notfound = True
 
     for line in source:
         # 点名相同，而且站号相同
-
         if flag == 'ai':
             if line[1] == query_data[2] and line[10].split('_')[1] == query_data[9]:
                 return line[8]
         if flag == 'di':
             if line[1] == query_data[2] and line[10].split('_')[1] == query_data[10]:
-                print('line[8] is %s' % line[8])
+                # print('line[8] is %s' % line[8])
                 return line[8]
 
-    if notfound:
-        return 'notfound'
+    # if notfound:
+    #     return 'notfound'
 
 
 def targets_handler(targets, source_data):
@@ -80,7 +77,6 @@ def targets_handler(targets, source_data):
                 else:
                     csv_out_data = query_data[:]
                     value = csv_query(query_data, source_data, flag)
-                    # print(value)
                     # value有两种可能：正常值, 或 'notfound'
 
                     # ai_sheet和di_sheet中，存放value的位置是不一样的，所以:
@@ -140,11 +136,13 @@ def main():
         targets_handler(targets, source_data)
         #3. 所有文件处理完成，cue一下用户
         input('按任意键退出...')
-        sys.exit(0)
+        # sys.exit(0)
 
+    # 如果没找到目标文件
     elif len(targets) == 0:
         input('%s 文件夹中缺少ai_sheet.csv或di_sheet.csv，请检查。\n按任意键退出...' % csv_dir)
         sys.exit(1)
+    # 如果没找到源文件
     elif len(source) == 0:
         input('%s 文件夹中缺少exportIC.csv文件，请检查。\n按任意键退出...' % csv_dir)
         sys.exit(1)
@@ -152,3 +150,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
